@@ -296,6 +296,8 @@ def getSyn(synName):
 
 # %%
 if __name__=="__main__":
-    print(getSyn("宣传部门")[0][0])
+    inputStr="宣传部门"
+    print("输入内容：",inputStr)
+    print("输出内容：",getSyn(inputStr)[0][0])
 
 
