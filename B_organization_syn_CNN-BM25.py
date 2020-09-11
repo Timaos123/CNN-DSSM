@@ -6,18 +6,19 @@
 # %%
 import pickle as pkl
 
+#读取数据
 with open("./data/orgSynSampleList.pkl","rb") as orgSynSampleListFile:
     orgSynSampleList=pkl.load(orgSynSampleListFile)
 
+#数据预处理
 orgSynSampleList=[[rowItem.replace(" ","").strip().lower() if type(rowItem)==str else rowItem for rowItem in row] for row in orgSynSampleList]
 # orgSynSampleList=[row[1].replace(" ","").strip().lower() for row in orgSynSampleList]
 
 
-# %%
+#构建组织列表
 orgList=list(set([row[0] for row in orgSynSampleList]))
 
-
-# %%
+#构建(尾缀,尾缀数量)列表
 endList=[row[-1] for row in orgList]
 endItemList=list(set(endList))
 enList=[]
@@ -25,11 +26,11 @@ for endItemItem in endItemList:
     enList.append((endItemItem,endList.count(endItemItem)))
 
 
-# %%
+#构建基于尾缀数量进行排序的列表
 enList=list(sorted(enList,key=lambda row:row[1],reverse=True))
 
 
-# %%
+#存储尾缀列表
 newEndList=[row[0] for row in enList[:12]]
 with open("model/orgSuffix.pkl","wb+") as orgSuffixFile:
     pkl.dump(newEndList,orgSuffixFile)
@@ -37,24 +38,20 @@ with open("model/orgSuffix.pkl","wb+") as orgSuffixFile:
 # # Tfidf-cosine Similarity
 
 # %%
+#依照n-gram进行句子切分的函数（经验上看Tri-gram效果最好）
 def ngramCutSent(sentence):
     return " ".join(["".join(ngItem) for ngItem in ngrams([""]+[cItem for cItem in sentence]+[""],3)])
 
-
-# %%
 from sklearn.feature_extraction.text import TfidfVectorizer
 from nltk.util import ngrams
 
+#构建模型
 TOrgList=[ngramCutSent(row) for row in orgList]
 tfidfModel=TfidfVectorizer()
 tfidfModel.fit(TOrgList)
 
 
-# %%
-tfidfModel.transform(TOrgList)
-
-
-# %%
+#构造基于tfidf筛选出重要n-gram的函数
 import numpy as np
 def getKNgram(mySent):
     sV=tfidfModel.transform([ngramCutSent(mySent)])
@@ -65,10 +62,9 @@ def getKNgram(mySent):
 
     kwList=[row[0] for row in list(sorted(wpList,key=lambda wp:wp[1],reverse=True)) if row[1]>0.1]
     return kwList
-getKNgram("IEG互娱")
 
 
-# %%
+#存储tfidf模型
 import pickle as pkl
 with open("model/tfidf_org_syn.pkl","wb+") as tfidfModelFile:
     pkl.dump(tfidfModel,tfidfModelFile)
@@ -97,10 +93,10 @@ from sklearn.metrics import f1_score
 class MyCNN:
 
     def __init__(self,
-                seqList,
-                preModelPath="chinese_L-12_H-768_A-12",
-                learning_rate=0.1,
-                hiddenSize=None
+                seqList,#组织列表（用于提取组织名的最大长以及词汇）
+                preModelPath="chinese_L-12_H-768_A-12",#bert预训练模型path，主要需要相关的config以及词汇
+                learning_rate=0.1,#学习率
+                hiddenSize=None#隐藏层大小，默认为240
             ):
         self.preModelPath=preModelPath
         self.learning_rate=learning_rate
@@ -229,22 +225,24 @@ class MyCNN:
 
 
 # %%
+#实例化CNN-DSSM模型
 myCNN=MyCNN(orgList,learning_rate=0.0001)
 
 
 # %%
+#输出模型架构
 myCNN.model.summary()
 
 
 # %%
-import numpy as np
-
+#拆分X和y
 orgSynSampleArr=np.array(orgSynSampleList)
 X=[orgSynSampleArr[:,0],orgSynSampleArr[:,1]]
 X[0]=[row.replace(" ","").strip().lower() for row in X[0]]
 X[1]=[row.replace(" ","").strip().lower() for row in X[1]]
 y=orgSynSampleArr[:,2].astype(np.int32)
 
+#拆分训练测试集，testSize为测试集占比
 testSize=0.3
 trainSampleIndexList=(np.random.random_sample(int(len(X[0])*(1-testSize)))*len(X[0])).astype(int).tolist()
 trainX1=[X[0][sampleIndexItem] for sampleIndexItem in trainSampleIndexList]
@@ -252,10 +250,12 @@ trainX2=[X[1][sampleIndexItem] for sampleIndexItem in trainSampleIndexList]
 trainX=[trainX1,trainX2]
 trainy=np.array([y[sampleIndexItem] for sampleIndexItem in trainSampleIndexList])
 
+#训练模型
 myCNN.fit(trainX,trainy,epochs=500,batch_size=1024)
 
 
 # %%
+#测试模型
 print("testing model ...")
 
 testSampleIndexList=(np.random.random_sample(int(len(X[0])*testSize))*len(X[0])).astype(int).tolist()
@@ -265,8 +265,21 @@ testX2=[X[1][sampleIndexItem] for sampleIndexItem in testSampleIndexList]
 testX=[testX1,testX2]
 testy=np.array([y[sampleIndexItem] for sampleIndexItem in testSampleIndexList])
 
-preYC,preYP=myCNN.predict(testX)
+preYC,preYP=myCNN.predict(testX)#输出分类及分类概率
+# print("testX:",testX[:5])
+print("preY:",preYC[:5])
+print("testY:",testy[:5])
 
+trainPreYC,trainPreYP=myCNN.predict(trainX)
+TtrainCY=trainy
+print("train f1:",f1_score(TtrainCY,trainPreYC,average="macro"))
+TtestCY=testy
+TtestPreCY=preYC
+print("test f1:",f1_score(TtestCY,TtestPreCY,average="macro"))
+from sklearn.metrics import roc_auc_score
+print("auc:",roc_auc_score(TtestCY,TtestPreCY))
+
+#存储模型
 myCNN.model.save_weights("model/CNN_org_syn")
 hpDict={
     "learning_rate":myCNN.learning_rate,
@@ -280,21 +293,10 @@ with open("model/CNN_org_syn.pkl","wb+") as myModelFile:
     pkl.dump(hpDict,myModelFile)
 with open("model/CNN_org_syn_initList.pkl","wb+") as CNN_org_syn_initListFile:
     pkl.dump(orgList,CNN_org_syn_initListFile)
-# print("testX:",testX[:5])
-print("preY:",preYC[:5])
-print("testY:",testy[:5])
-
-trainPreYC,trainPreYP=myCNN.predict(trainX)
-TtrainCY=trainy
-print("train f1:",f1_score(TtrainCY,trainPreYC,average="macro"))
-TtestCY=testy
-TtestPreCY=preYC
-print("test f1:",f1_score(TtestCY,TtestPreCY,average="macro"))
 
 
-# %%
-from sklearn.metrics import roc_auc_score
-print("auc:",roc_auc_score(TtestCY,TtestPreCY))
+
+
 
 # %% [markdown]
 # # BM25
@@ -304,7 +306,9 @@ import pkuseg
 from gensim.summarization import bm25
 
 class BM25():
-    def __init__(self, opList, user_dict=None):
+    def __init__(self, 
+                opList,#[原始名称,可能名称]列表
+                user_dict=None):#用户自定义词典
         if user_dict is None:
             self.seg = pkuseg.pkuseg(user_dict=user_dict, postag=False)
         else:
@@ -322,7 +326,7 @@ class BM25():
         self.corpus = corpus
         #self.average_idf = sum(map(lambda k: float(self.bm25Model.idf[k]), self.bm25Model.idf.keys())) / len(self.bm25Model.idf.keys())
 
-    def cal_BM25_sim(self, sentence: str):
+    def cal_BM25_sim(self, sentence: str):#获取备选名称列表（按照相似程度BM25排序）
         sentence=sentence.lower()
         query = self.seg.cut(sentence)
         # print(query)
@@ -335,14 +339,15 @@ class BM25():
 
 
 # %%
+#构造BM25数据集（仅真实数据）
 dtForBM25=[row for row in orgSynSampleList if row[2]==1]
 
 
-# %%
+#实例化BM25模型
 myBM25=BM25(dtForBM25)
 
 
-# %%
+#存储BM25模型（jupyter可以存储同时读取pkl但是py文件就不行，有亻老能解决这个问题嘛？）
 import pickle as pkl
 with open("model/BM25_org_syn.pkl","wb+") as BM25ModelFile:
     pkl.dump(myBM25,BM25ModelFile)
